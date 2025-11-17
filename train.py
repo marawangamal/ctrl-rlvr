@@ -41,8 +41,34 @@ def extract_answer_gsm8k(text):
     return None
 
 
-def load_gsm8k(n=100):
-    data = gsm8k["train"].select(range(n))
+def load_gsm8k(n=None):
+
+    TEMPLATE_GSM8K = """
+    You are a helpful assistant that solves grade-school math word problems.
+    For each problem:
+    1. Think step by step and show your reasoning.
+    2. On the last line, write the final answer in the form: #### <number>
+
+    Here is an example:
+
+    Question: A bookstore sold 18 books in the morning and 27 books in the afternoon. How many books did it sell in total that day?
+    Answer:
+    First, add the books sold in the morning and the afternoon.
+    18 + 27 = 45.
+    So the bookstore sold 45 books in total.
+    #### 45
+
+    Now solve this problem:
+
+    Question: {question}
+    Answer:
+    """
+
+    data = gsm8k["train"]
+    if n is not None:
+        data = data.select(range(n))
+
+    prefix = ""
 
     formatted = []
     for item in data:
@@ -50,7 +76,7 @@ def load_gsm8k(n=100):
         solution = item["answer"]  # GSM8K solutions are full step-by-step
         formatted.append(
             {
-                "problem": problem,
+                "problem": TEMPLATE_GSM8K.format(question=problem),
                 "solution": solution,
                 "answer": extract_answer_gsm8k(solution),
             }
@@ -85,29 +111,19 @@ def get_dfa_model(
 
     vocab_size = len(tokenizer)
 
-    ##################################### prefix, suffix, prompt #####################################
+    # Prefix & suffix constraints
     prefix = ""  # generate text starting with nothing
     suffix = ".<|endoftext|>"  # generate text ending with '<|endoftext|>'; a suffix must end with the eos token
-    # prompt = '<|endoftext|>' # prompt the base model with the '<|endoftext|>' token
-
     prefix_ids = tokenizer.encode(prefix)
     if suffix_ids is None:
         suffix_ids = tokenizer.encode(suffix)
-    # prompt_ids = tokenizer.encode(prompt)
-    ##################################### prefix, suffix, prompt #####################################
 
-    ##################################### DFA Construction #####################################
+    # DFA Construction
     # ac_builder constructs a DFA representing the constraint that (at least)
     # one the patterns must appear; a pattern is a sequence of token ids
     ac_builder = ctrlg.AhoCorasickBuilder(vocab_size)
 
     dfa_graphs = []
-
-    # constraint 1:
-    # one of ' riding a bike', ' ride bikes', ' rides a bike', ' biking', ' bikes' has to appear
-    # AND one of ' park', ' beach' has to appear
-    # keyphrases = [[' riding a bike', ' ride bikes', ' rides a bike', ' biking', ' bikes'],
-    #             [' park', ' beach']]
     for keyphrase in keyphrases:
         patterns = [tokenizer.encode(x) for x in keyphrase]
         dfa_graphs.append(ac_builder.build(patterns))
@@ -119,22 +135,8 @@ def get_dfa_model(
 
     # compile the dfa_graph for efficient GPU execution
     dfa_model = ctrlg.DFAModel(dfa_graph, vocab_size).to(device)
-    ##################################### DFA Construction #####################################
 
-    ##################################### token length #####################################
-    # specify the min_new_tokens and max_new_tokens to be generated (excluding
-    # the prefix and suffix) make sure that the numbers here would not conflict
-    # with the given constraint: e.g. ask the model to generate 10 words with
-    # max_new_tokens = 8
-    # min_new_tokens = 5
-    # max_new_tokens = 32
-    ##################################### token length #####################################
-
-    # # DEBUG:
-    # print(f"prompt_ids shape: {prompt_ids.shape}")
-    # print(f"prefix_ids shape: {prefix_ids.shape}")
-    # print(f"suffix_ids shape: {suffix_ids.shape}")
-
+    # Constraint logits processor
     constraint_logits_processor = ctrlg.ConstraintLogitsProcessor(
         hmm_model,
         dfa_model,
@@ -371,7 +373,9 @@ def test_model(
     beam_size=32,
 ):
 
-    for problem in test_problems:
+    rewards = []
+    print_indexes = np.linspace(0, len(test_problems), 5).astype(int)
+    for i, problem in enumerate(test_problems):
         prompt = f"Please solve the following math problem: {problem['problem']}"
         inputs = tokenizer(prompt, return_tensors="pt").to(device)
 
@@ -406,38 +410,75 @@ def test_model(
                 output_ids[0][inputs.input_ids.shape[1] :], skip_special_tokens=True
             )
             reward = compute_reward(response, problem["answer"])
+            rewards.append(reward)
 
-            print(f"Problem: {problem['problem']}")
-            print(f"Model's response: {repr(response)}")
-            print(f"Correct answer: {problem['answer']}")
-            print(f"Reward: {reward}")
-            print("-" * 50)
+            if i in print_indexes:
+                print(f"[{i}] Problem: {problem['problem']}")
+                print(f"[{i}]Model's response: {repr(response)}")
+                print(f"[{i}]Correct answer: {problem['answer']}")
+                print(f"[{i}]Reward: {reward}")
+                print("-" * 50)
+
+    avg_reward = np.mean(rewards)
+    return avg_reward
 
 
 if __name__ == "__main__":
     # Load model and tokenizer
 
     # HPs
-    max_new_tokens = 32
+    max_new_tokens = 64
     min_new_tokens = 6
     beam_size = 32
     epochs = 3
-    num_problems = 10
+    num_problems = None  # i.e. use all problems
     use_hmm_train = False
     use_hmm_test = False
 
     # Main
+    # =========================== Main (gemma) ===========================
     # model_name = "google/gemma-2b"
     # hmm_model_path = snapshot_download(
     #     repo_id="gwenweng/gemma", local_dir="models/gemma"
     # )
+    # hmm_model = ctrlg.HMM.from_pretrained(hmm_model_path)
+    # tokenizer = AutoTokenizer.from_pretrained(model_name)
+    # model = AutoModelForCausalLM.from_pretrained(model_name, dtype=torch.bfloat16)
 
-    # Debug
+    # # GEMMA LoRA config
+    # config = LoraConfig(
+    #     r=16,
+    #     lora_alpha=32,
+    #     target_modules=["q_proj", "k_proj", "v_proj", "o_proj"],
+    #     lora_dropout=0.05,
+    #     bias="none",
+    #     task_type="CAUSAL_LM",
+    # )
+    # model = get_peft_model(model, config)
+
+    # =========================== Main2 (Tulu) ===========================
+    model_name = "allenai/tulu-2-7b"
+    hmm_model_path = "ctrlg/hmm_tulu2-7b_writing-prompts_32768"
+    hmm_model = ctrlg.HMM.from_pretrained(hmm_model_path)
+    tokenizer = AutoTokenizer.from_pretrained(model_name)
+    model = AutoModelForCausalLM.from_pretrained(model_name, dtype=torch.bfloat16)
+
+    # Tulu LoRA config
+    config = LoraConfig(
+        r=16,
+        lora_alpha=32,
+        target_modules=["q_proj", "k_proj", "v_proj", "o_proj"],
+        lora_dropout=0.05,
+        bias="none",
+        task_type="CAUSAL_LM",
+    )
+    model = get_peft_model(model, config)
+
+    # =========================== Debug ===========================
     model_name = "gpt2-large"
     hmm_model_path = "ctrlg/hmm_gpt2-large_common-gen_4096"
 
     hmm_model = ctrlg.HMM.from_pretrained(hmm_model_path)
-
     tokenizer = AutoTokenizer.from_pretrained(model_name)
     model = AutoModelForCausalLM.from_pretrained(model_name, dtype=torch.bfloat16)
 
@@ -454,17 +495,7 @@ if __name__ == "__main__":
         ],
     )
     model = get_peft_model(model, config)
-
-    # # GEMMA LoRA config
-    # config = LoraConfig(
-    #     r=16,
-    #     lora_alpha=32,
-    #     target_modules=["q_proj", "k_proj", "v_proj", "o_proj"],
-    #     lora_dropout=0.05,
-    #     bias="none",
-    #     task_type="CAUSAL_LM",
-    # )
-    # model = get_peft_model(model, config)
+    # =========================== Debug ===========================
 
     # Set up device
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -495,6 +526,18 @@ if __name__ == "__main__":
     training_problems = math_problems[:split_idx]
     eval_problems = math_problems[split_idx:]
     performance_history = []
+
+    # Test model before training
+    avg_reward = test_model(
+        model=model,
+        test_problems=eval_problems,
+        tokenizer=tokenizer,
+        device=device,
+        max_new_tokens=max_new_tokens,
+        min_new_tokens=min_new_tokens,
+        beam_size=beam_size,
+    )
+    print(f"Average reward before training: {avg_reward:.4f}")
 
     for epoch in range(epochs):
         epoch_rewards = []
@@ -531,6 +574,7 @@ if __name__ == "__main__":
         beam_size=beam_size,
         hmm_model=hmm_model if use_hmm_test else None,
     )
+    print(f"Average reward after training: {avg_reward:.4f}")
 
     # Save model checkpoint
     model.save_pretrained(f"checkpoints/grpo_{model_name}_hmm{use_hmm_train}")
