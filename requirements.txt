@@ -1,11 +1,12 @@
-protobuf
-torch 
-transformers 
+# trl
+# protobuf
+# torch 
+# transformers 
 datasets 
-tqdm 
-numpy 
-matplotlib
-peft
-git+https://github.com/joshuacnf/Ctrl-G
-tiktoken
-sentencepiece
+# tqdm 
+# numpy 
+# matplotlib
+# peft
+# git+https://github.com/joshuacnf/Ctrl-G
+# tiktoken
+# sentencepiece

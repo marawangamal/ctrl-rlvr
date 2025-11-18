@@ -407,16 +407,16 @@ def test_model(
                 )
 
             response = tokenizer.decode(
-                output_ids[0][inputs.input_ids.shape[1] :], skip_special_tokens=True
+                output_ids[0][inputs.input_ids.shape[1] :], skip_special_tokens=False
             )
             reward = compute_reward(response, problem["answer"])
             rewards.append(reward)
 
             if i in print_indexes:
-                print(f"[{i}] Problem: {problem['problem']}")
-                print(f"[{i}]Model's response: {repr(response)}")
-                print(f"[{i}]Correct answer: {problem['answer']}")
-                print(f"[{i}]Reward: {reward}")
+                print(f"[{i}/{len(test_problems)}] Problem: {problem['problem']}")
+                print(f"[{i}/{len(test_problems)}] Model's response: {repr(response)}")
+                print(f"[{i}/{len(test_problems)}] Correct answer: {problem['answer']}")
+                print(f"[{i}/{len(test_problems)}] Reward: {reward}")
                 print("-" * 50)
 
     avg_reward = np.mean(rewards)
@@ -427,7 +427,7 @@ if __name__ == "__main__":
     # Load model and tokenizer
 
     # HPs
-    max_new_tokens = 64
+    max_new_tokens = 256
     min_new_tokens = 6
     beam_size = 32
     epochs = 3
@@ -475,26 +475,26 @@ if __name__ == "__main__":
     model = get_peft_model(model, config)
 
     # =========================== Debug ===========================
-    model_name = "gpt2-large"
-    hmm_model_path = "ctrlg/hmm_gpt2-large_common-gen_4096"
+    # model_name = "gpt2-large"
+    # hmm_model_path = "ctrlg/hmm_gpt2-large_common-gen_4096"
 
-    hmm_model = ctrlg.HMM.from_pretrained(hmm_model_path)
-    tokenizer = AutoTokenizer.from_pretrained(model_name)
-    model = AutoModelForCausalLM.from_pretrained(model_name, dtype=torch.bfloat16)
+    # hmm_model = ctrlg.HMM.from_pretrained(hmm_model_path)
+    # tokenizer = AutoTokenizer.from_pretrained(model_name)
+    # model = AutoModelForCausalLM.from_pretrained(model_name, dtype=torch.bfloat16)
 
-    # GPT-2 LoRA config
-    config = LoraConfig(
-        r=16,
-        lora_alpha=32,
-        lora_dropout=0.05,
-        bias="none",
-        task_type="CAUSAL_LM",
-        target_modules=[
-            "c_attn",  # QKV projection
-            "c_proj",  # output projection
-        ],
-    )
-    model = get_peft_model(model, config)
+    # # GPT-2 LoRA config
+    # config = LoraConfig(
+    #     r=16,
+    #     lora_alpha=32,
+    #     lora_dropout=0.05,
+    #     bias="none",
+    #     task_type="CAUSAL_LM",
+    #     target_modules=[
+    #         "c_attn",  # QKV projection
+    #         "c_proj",  # output projection
+    #     ],
+    # )
+    # model = get_peft_model(model, config)
     # =========================== Debug ===========================
 
     # Set up device
@@ -522,7 +522,7 @@ if __name__ == "__main__":
     ##############################################################################
 
     math_problems = load_gsm8k(num_problems)
-    split_idx = int(len(math_problems) * 0.8)
+    split_idx = int(len(math_problems) * 0.98)
     training_problems = math_problems[:split_idx]
     eval_problems = math_problems[split_idx:]
     performance_history = []
