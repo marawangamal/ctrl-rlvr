@@ -14,9 +14,14 @@ preambles:
 
   gtamia:   
     - "#!/bin/bash"
+    # Single node w/ 4 GPUs
     - "#SBATCH --gres=gpu:4"
+    # Multi-node w/ 4 GPUs per node
+    # - "#SBATCH --nodes=2"
+    # - "#SBATCH --gpus-per-node=h100:4"
     - "#SBATCH --mem=128G"
     - "#SBATCH --cpus-per-task=16"
+    - "#SBATCH --time=24:00:00" # 24 hours
     - "module load cuda/12.6 arrow python/3.12 httpproxy"
     - "source /scratch/m/mgamal/crl/.venv/bin/activate"
 
@@ -24,14 +29,17 @@ group:
   name: "ctrl-grpo"
   type: sequential
   jobs:
-    - group: 
-        name: "training"
-        type: parallel
-        jobs:
-          - job:
-              preamble: gtamia
-              command: "python train_grpo.py"
+    - group:
+        type: sweep
+        preamble: gtamia
+        sweep:
+          model: ["allenai/tulu-2-7b"]
+        sweep_template:  "accelerate launch train_grpo.py --model {model}"
 
-          # - job:
-          #     preamble: gtamia
-          #     command: "python train.py --model vgg --lr 0.001 --epochs 100"
+    # - group: 
+    #     name: "gemma-2b"
+    #     type: parallel
+    #     jobs:
+    #       - job:
+    #           preamble: gtamia
+    #           command: "accelerate launch train_grpo.py --model google/gemma-2b"
