@@ -1,32 +1,3 @@
-# # train_grpo.py
-# import copy
-# from typing import Callable, Dict, Any, Optional, List
-# import torch
-# from datasets import load_dataset
-# from transformers import AutoTokenizer, LogitsProcessor
-# from contextlib import nullcontext
-# from trl import GRPOTrainer, GRPOConfig
-# from trl.rewards import accuracy_reward
-# from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
-# from trl.data_utils import (
-#     apply_chat_template,
-#     is_conversational,
-#     prepare_multimodal_messages,
-#     prepare_multimodal_messages_vllm,
-# )
-# from trl.trainer.utils import (
-#     nanmax,
-#     nanmin,
-#     nanstd,
-#     pad,
-# )
-# from trl.extras.profiling import profiling_context
-# from trl.models import unwrap_model_for_generation
-# from transformers import LogitsProcessorList
-# import wandb
-# import ctrlg
-# import argparse
-# Standard library
 import argparse
 from contextlib import nullcontext
 from typing import Any, Dict, List, Optional
@@ -57,10 +28,6 @@ from accelerate.utils import (
     is_peft_model,
     set_seed,
 )
-
-
-#         prompt_ids_list, completion_ids_list, num_items_in_batch, sampling_per_token_logps_list, extra_fields = (
-# https://github.com/huggingface/trl/blob/e622196097109080b73584d598d4162e64fc6bea/trl/trainer/grpo_trainer.py#L1495
 
 
 ##############################################################################
@@ -949,6 +916,9 @@ class DummyLogitsProcessor(LogitsProcessor):
                 min_new_tokens=min_new_tokens,
                 max_new_tokens=max_new_tokens,
             )
+        else:
+            # give warning that no dfa logits processor will be used
+            print("Warning: no DFA logits processor will be used")
 
     def __call__(self, input_ids: torch.Tensor, scores: torch.Tensor) -> torch.Tensor:
         if self.dfa_logits_processor is not None:
@@ -1017,9 +987,8 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    # hmm_model = None
-    hmm_model = ctrlg.HMM.from_pretrained("ctrlg/hmm_gpt2-large_common-gen_4096").to(
-        device
+    hmm_model = (
+        ctrlg.HMM.from_pretrained(args.hmm).to(device) if args.hmm is not None else None
     )
     max_new_tokens = 128
     min_new_tokens = 6
