@@ -1,5 +1,31 @@
+"""
+Train a GRPO model with a specified model name.
+
+Example usage:
+python train_grpo.py --model gpt2-large --hmm ctrlg/hmm_gpt2-large_common-gen_32768
+
+Evaluation:
+accelerate launch -m lm_eval --model hf \
+    --model_args pretrained=mremila/grpo_model_deepmath_103k_hm_none_b_8_n_10 \
+    --tasks gsm8k \
+    --batch_size 64
+
+grpo_model_deepmath_103k_hm_none_b_64_n_1000:
+|Tasks|Version|     Filter     |n-shot|  Metric   |   |Value |   |Stderr|
+|-----|------:|----------------|-----:|-----------|---|-----:|---|-----:|
+|gsm8k|      3|flexible-extract|     5|exact_match|↑  |0.3609|±  |0.0132|
+|     |       |strict-match    |     5|exact_match|↑  |0.3495|±  |0.0131|
+
+gemma-2b:
+|Tasks|Version|     Filter     |n-shot|  Metric   |   |Value |   |Stderr|
+|-----|------:|----------------|-----:|-----------|---|-----:|---|-----:|
+|gsm8k|      3|flexible-extract|     5|exact_match|↑  |0.1766|±  |0.0105|
+|     |       |strict-match    |     5|exact_match|↑  |0.1721|±  |0.0104|
+"""
+
 import argparse
 from contextlib import nullcontext
+import os
 from typing import Any, Dict, List, Optional
 
 # Third-party
@@ -9,6 +35,7 @@ import wandb
 from datasets import load_dataset
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from transformers import AutoTokenizer, LogitsProcessor, LogitsProcessorList
+from transformers import TrainerCallback
 from trl import GRPOConfig, GRPOTrainer
 from trl.data_utils import (
     apply_chat_template,
@@ -28,6 +55,7 @@ from accelerate.utils import (
     is_peft_model,
     set_seed,
 )
+from peft import LoraConfig
 
 
 ##############################################################################
@@ -916,7 +944,7 @@ class DummyLogitsProcessor(LogitsProcessor):
                 min_new_tokens=min_new_tokens,
                 max_new_tokens=max_new_tokens,
             )
-        else:
+        elif hmm_model is not None:
             # give warning that no dfa logits processor will be used
             print("Warning: no DFA logits processor will be used")
 
@@ -957,7 +985,13 @@ def get_tokenizer(model_name):
 
 
 def fmt_str(s):
-    return s.lower().split("/")[-1].replace("-", "_")
+    if s is None:
+        return s
+    return s.replace("-", "_").replace("/", "_")
+
+
+def create_run_name(dct):
+    return fmt_str(f"_".join([f"{k}_{v}" for k, v in dct.items()]))
 
 
 if __name__ == "__main__":
@@ -984,6 +1018,18 @@ if __name__ == "__main__":
         default=64,
         help="Batch size to use for training",
     )
+    parser.add_argument(
+        "--max_samples",
+        type=int,
+        default=None,
+        help="Use at most this many training samples (before GRPO).",
+    )
+    parser.add_argument(
+        "--lora_r",
+        type=int,
+        default=None,
+        help="Rank of the LoRA matrices.",
+    )
     args = parser.parse_args()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -996,21 +1042,53 @@ if __name__ == "__main__":
     dataset_name = "trl-lib/DeepMath-103K"
 
     dataset = load_dataset(dataset_name, split="train")
-    run_name = f"grpo_model_{fmt_str(model_name)}_dataset_{fmt_str(dataset_name)}"
+    if args.max_samples is not None:
+        dataset = dataset.select(range(args.max_samples))
+    ds = dataset.train_test_split(test_size=0.1)
+    train_dataset, test_dataset = ds["train"], ds["test"]
+    run_name = f"grpo_model_" + create_run_name(
+        {
+            "m": model_name.split("/")[-1],
+            "d": dataset_name.split("/")[-1],
+            "hm": args.hmm.split("/")[-1] if args.hmm is not None else None,
+            "b": args.batch_size,
+            "n": args.max_samples,
+        }
+    )
+    print(f"\n\nRunning with run name: {run_name}\n\n")
+
+    peft_config = (
+        LoraConfig(r=256, lora_alpha=16, target_modules="all-linear")
+        if args.lora_r is not None
+        else None
+    )
     training_args = GRPOConfig(
         report_to="wandb",
         per_device_train_batch_size=args.batch_size,
         output_dir=f"./experiments/{run_name}",
-        logging_steps=10,
         run_name=run_name,
         project="ctrl-grpo",
+        save_strategy="steps",
+        # Saving
+        save_steps=100,
+        save_total_limit=2,
+        # Logging
+        logging_steps=100,
+        log_completions=True,
+        num_completions_to_print=4,
+        # Eval
+        eval_steps=500,
+        eval_strategy="steps",
+        # Training
+        bf16=True,
     )
     tokenizer = get_tokenizer(model_name)
     trainer = GRPOTrainerCustom(
         model=model_name,
         processing_class=tokenizer,
         reward_funcs=accuracy_reward,
-        train_dataset=dataset,
+        train_dataset=train_dataset,
+        eval_dataset=test_dataset,
         args=training_args,
         logits_processor_fns=[
             lambda *args, **kwargs: DummyLogitsProcessor(
@@ -1022,5 +1100,11 @@ if __name__ == "__main__":
                 max_new_tokens=max_new_tokens,
             )
         ],
+        peft_config=peft_config,
     )
-    trainer.train()
+    trainer.train(
+        resume_from_checkpoint=(
+            True if len(os.listdir(f"./experiments/{run_name}")) > 0 else False
+        )
+    )
+    trainer.push_to_hub()

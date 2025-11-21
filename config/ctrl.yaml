@@ -29,17 +29,21 @@ group:
   name: "ctrl-grpo"
   type: sequential
   jobs:
-    - group:
-        type: sweep
-        preamble: gtamia
-        sweep:
-          model: ["allenai/tulu-2-7b"]
-        sweep_template:  "accelerate launch train_grpo.py --model {model}"
+    # - group:
+    #     type: sweep
+    #     preamble: gtamia
+    #     sweep:
+    #       model: ["allenai/tulu-2-7b"]
+    #     sweep_template:  "accelerate launch train_grpo.py --model {model}"
 
-    # - group: 
-    #     name: "gemma-2b"
-    #     type: parallel
-    #     jobs:
-    #       - job:
-    #           preamble: gtamia
-    #           command: "accelerate launch train_grpo.py --model google/gemma-2b"
+    - group: 
+        name: "gemma-2b"
+        type: parallel
+        jobs:
+          - job:
+              preamble: gtamia
+              command: "accelerate launch train_grpo.py --model google/gemma-2b"
+
+          - job:
+              preamble: gtamia
+              command: "accelerate launch train_grpo.py --model google/gemma-2b"
