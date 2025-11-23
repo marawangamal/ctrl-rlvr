@@ -26,7 +26,7 @@ gemma-2b:
 import argparse
 from contextlib import nullcontext
 import os
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 # Third-party
 import ctrlg
@@ -858,32 +858,100 @@ class GRPOTrainerCustom(GRPOTrainer):
 ##############################################################################
 
 
-def get_dfa_model(
-    hmm_model,
-    tokenizer,
-    prompt_ids,
-    keyphrases=[[" "]],
-    suffix_ids=None,
-    min_new_tokens=5,
-    max_new_tokens=32,
-):
+# def get_dfa_model(
+#     hmm_model,
+#     tokenizer,
+#     prompt_ids,
+#     keyphrases=[[" "]],
+#     suffix_ids=None,
+#     min_new_tokens=5,
+#     max_new_tokens=32,
+# ):
 
-    device = next(hmm_model.parameters()).device
+#     device = next(hmm_model.parameters()).device
+#     vocab_size = len(tokenizer)
+
+#     # Prefix & suffix constraints
+#     prefix = ""  # generate text starting with nothing
+#     suffix = ".<|endoftext|>"  # generate text ending with '<|endoftext|>'; a suffix must end with the eos token
+#     prefix_ids = tokenizer.encode(prefix)
+#     if suffix_ids is None:
+#         suffix_ids = tokenizer.encode(suffix)
+
+#     # DFA Construction
+#     # ac_builder constructs a DFA representing the constraint that (at least)
+#     # one the patterns must appear; a pattern is a sequence of token ids
+#     ac_builder = ctrlg.AhoCorasickBuilder(vocab_size)
+
+#     dfa_graphs = []
+#     for keyphrase in keyphrases:
+#         patterns = [tokenizer.encode(x) for x in keyphrase]
+#         dfa_graphs.append(ac_builder.build(patterns))
+
+#     # taking the intersection of the DFAs, i.e., "logical and" of the constraints.
+#     # This function also minimizes the constructed DFA, which is mainly CPU-based operations;
+#     # Due to its pure python implemenation, DFA minimization can be slow for complex constraints
+#     dfa_graph = ctrlg.DFA_prod(dfa_graphs, mode="intersection")
+
+#     # compile the dfa_graph for efficient GPU execution
+#     dfa_model = ctrlg.DFAModel(dfa_graph, vocab_size).to(device)
+
+#     # Constraint logits processor
+#     constraint_logits_processor = ctrlg.ConstraintLogitsProcessor(
+#         hmm_model,
+#         dfa_model,
+#         min_new_tokens,
+#         max_new_tokens,
+#         prompt_ids,
+#         prefix_ids=prefix_ids,
+#         suffix_ids=suffix_ids,
+#     )
+
+#     return constraint_logits_processor
+
+
+def get_dfa_model_v2(
+    hmm_model: torch.nn.Module,
+    prompt_ids: List[int],  # Shape: (B, T)
+    tokenizer: AutoTokenizer,
+    keyphrases: List[List[str]] = [[" "]],
+    suffix_ids: Optional[List[int]] = None,
+    min_new_tokens: int = 5,
+    max_new_tokens: int = 32,
+    device: torch.device = torch.device("cuda" if torch.cuda.is_available() else "cpu"),
+):
+    """Constructs a DFA model for the given prompt and keyphrases.
+
+    Args:
+        prompt_ids (List[int]): Prompt integer list
+        keyphrases (List[List[str]], optional): List of keyphrases to be constrained. Defaults to [[' ']].
+        suffix_ids (Optional[List[int]], optional): Suffix integer list. Defaults to None.
+        min_new_tokens (int, optional): Minimum number of tokens to generate. Defaults to 5.
+        max_new_tokens (int, optional): Maximum number of tokens to generate. Defaults to 32.
+        device (torch.device, optional): Device to run the model on. Defaults to torch.device('cuda' if torch.cuda.is_available() else 'cpu').
+
+    Returns:
+        constraint_logits_processor: Logits processor for the DFA model.
+    """
+
     vocab_size = len(tokenizer)
 
-    # Prefix & suffix constraints
+    ##################################### prefix, suffix, prompt #####################################
     prefix = ""  # generate text starting with nothing
     suffix = ".<|endoftext|>"  # generate text ending with '<|endoftext|>'; a suffix must end with the eos token
+
     prefix_ids = tokenizer.encode(prefix)
     if suffix_ids is None:
         suffix_ids = tokenizer.encode(suffix)
 
-    # DFA Construction
+    ##################################### DFA Construction #####################################
     # ac_builder constructs a DFA representing the constraint that (at least)
     # one the patterns must appear; a pattern is a sequence of token ids
     ac_builder = ctrlg.AhoCorasickBuilder(vocab_size)
 
     dfa_graphs = []
+
+    # constraint 1:
     for keyphrase in keyphrases:
         patterns = [tokenizer.encode(x) for x in keyphrase]
         dfa_graphs.append(ac_builder.build(patterns))
@@ -896,7 +964,8 @@ def get_dfa_model(
     # compile the dfa_graph for efficient GPU execution
     dfa_model = ctrlg.DFAModel(dfa_graph, vocab_size).to(device)
 
-    # Constraint logits processor
+    ##################################### token length #####################################
+
     constraint_logits_processor = ctrlg.ConstraintLogitsProcessor(
         hmm_model,
         dfa_model,
@@ -919,6 +988,7 @@ class DummyLogitsProcessor(LogitsProcessor):
         hmm_model: Optional[torch.nn.Module] = None,
         min_new_tokens: int = 5,
         max_new_tokens: int = 32,
+        constraint_mode: Literal["suffix", "keyphrase"] = "suffix",
     ):
         self.generate_inputs = generate_inputs
         self.prompts = prompts
@@ -936,13 +1006,27 @@ class DummyLogitsProcessor(LogitsProcessor):
             device = self.generate_inputs["input_ids"][0].device
             hmm_model = hmm_model.to(device)
 
-            self.dfa_logits_processor = get_dfa_model(
+            keyphrases = (
+                [[prompts[0]["solution"]]]
+                if constraint_mode == "keyphrase" or constraint_mode == "both"
+                else [[" "]]
+            )
+            suffix_ids = (
+                tokenizer.encode(prompts[0]["solution"])
+                if constraint_mode == "suffix" or constraint_mode == "both"
+                else None
+            )
+            prompt_ids = generate_inputs["input_ids"][0].tolist()
+
+            self.dfa_logits_processor = get_dfa_model_v2(
                 hmm_model=hmm_model,
                 tokenizer=tokenizer,
-                prompt_ids=generate_inputs["input_ids"][0],
-                keyphrases=[[prompts[0]["solution"]]],
+                prompt_ids=prompt_ids,
+                keyphrases=keyphrases,
+                suffix_ids=suffix_ids,
                 min_new_tokens=min_new_tokens,
                 max_new_tokens=max_new_tokens,
+                device=generate_inputs["input_ids"][0].device,
             )
         elif hmm_model is not None:
             # give warning that no dfa logits processor will be used
@@ -1002,7 +1086,7 @@ if __name__ == "__main__":
         "--model",
         type=str,
         # default="Qwen/Qwen2-0.5B-Instruct",
-        default="gpt2",  # use even smaller model: "erwanf/gpt2-mini" or "gpt2-small"
+        default="ctrlg/gpt2-large_common-gen",  # use even smaller model: "erwanf/gpt2-mini" or "gpt2-small"
         help="Name of the model to train (e.g., 'tulu', 'google/gemma-2b', etc.)",
     )
     parser.add_argument(
@@ -1012,10 +1096,11 @@ if __name__ == "__main__":
         # f'ctrlg/hmm_gpt2-large_common-gen_4096' # alternatively 'ctrlg/hmm_gpt2-large_common-gen_32768' for better quality
         help="Name of the HMM model to use (e.g., 'ctrl-g/gpt2', 'gwenweng/gemma', 'gwenweng/gpt2', etc.)",
     )
+    # --model gpt2 --batch_size 8 --hmm ctrlg/hmm_gpt2-large_common-gen_4096
     parser.add_argument(
         "--batch_size",
         type=int,
-        default=64,
+        default=8,
         help="Batch size to use for training",
     )
     parser.add_argument(
@@ -1030,35 +1115,64 @@ if __name__ == "__main__":
         default=None,
         help="Rank of the LoRA matrices.",
     )
+    parser.add_argument(
+        "--constraint_mode",
+        type=str,
+        default="suffix",
+        choices=["suffix", "keyphrase", "both"],
+        help="Constraint mode to use (e.g., 'suffix', 'keyphrase', 'both').",
+    )
+    parser.add_argument(
+        "--dataset_name",
+        type=str,
+        default="trl-lib/DeepMath-103K",
+        help="Name of the dataset to use (e.g., 'trl-lib/DeepMath-103K', 'trl-lib/DeepMath-103K-test', etc.)",
+    )
+    parser.add_argument(
+        "--max_new_tokens",
+        type=int,
+        default=32,
+        help="Maximum length of the prompt.",
+    )
+    parser.add_argument(
+        "--min_new_tokens",
+        type=int,
+        default=6,
+        help="Maximum number of new tokens to generate.",
+    )
     args = parser.parse_args()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     hmm_model = (
         ctrlg.HMM.from_pretrained(args.hmm).to(device) if args.hmm is not None else None
     )
-    max_new_tokens = 128
-    min_new_tokens = 6
+    max_new_tokens = args.max_new_tokens
+    min_new_tokens = args.min_new_tokens
     model_name = args.model
-    dataset_name = "trl-lib/DeepMath-103K"
+    dataset_name = args.dataset_name
+    extra_args = ["main"] if dataset_name == "gsm8k" else []
 
-    dataset = load_dataset(dataset_name, split="train")
+    train_dataset = load_dataset(dataset_name, *extra_args, split="train")
+    test_dataset = load_dataset(dataset_name, *extra_args, split="test")
     if args.max_samples is not None:
-        dataset = dataset.select(range(args.max_samples))
-    ds = dataset.train_test_split(test_size=0.1)
-    train_dataset, test_dataset = ds["train"], ds["test"]
-    run_name = f"grpo_model_" + create_run_name(
+        train_dataset = train_dataset.select(range(args.max_samples))
+        test_dataset = test_dataset.select(range(args.max_samples))
+    run_name = f"crl_" + create_run_name(
         {
             "m": model_name.split("/")[-1],
             "d": dataset_name.split("/")[-1],
             "hm": args.hmm.split("/")[-1] if args.hmm is not None else None,
+            "mx": args.max_new_tokens,
+            "mn": args.min_new_tokens,
             "b": args.batch_size,
             "n": args.max_samples,
+            "c": args.constraint_mode,
         }
     )
     print(f"\n\nRunning with run name: {run_name}\n\n")
 
     peft_config = (
-        LoraConfig(r=256, lora_alpha=16, target_modules="all-linear")
+        LoraConfig(r=args.lora_r, lora_alpha=16, target_modules="all-linear")
         if args.lora_r is not None
         else None
     )
@@ -1073,14 +1187,14 @@ if __name__ == "__main__":
         save_steps=100,
         save_total_limit=2,
         # Logging
-        logging_steps=100,
+        logging_steps=5,
         log_completions=True,
         num_completions_to_print=4,
         # Eval
-        eval_steps=500,
-        eval_strategy="steps",
+        # eval_steps=500,
+        # eval_strategy="steps",
         # Training
-        bf16=True,
+        # bf16=True,
     )
     tokenizer = get_tokenizer(model_name)
     trainer = GRPOTrainerCustom(
@@ -1091,13 +1205,14 @@ if __name__ == "__main__":
         eval_dataset=test_dataset,
         args=training_args,
         logits_processor_fns=[
-            lambda *args, **kwargs: DummyLogitsProcessor(
-                *args,
-                **kwargs,
+            lambda *a, **kw: DummyLogitsProcessor(
+                *a,
+                **kw,
                 tokenizer=tokenizer,
                 hmm_model=hmm_model,
                 min_new_tokens=min_new_tokens,
                 max_new_tokens=max_new_tokens,
+                constraint_mode=args.constraint_mode,
             )
         ],
         peft_config=peft_config,
