@@ -56,13 +56,16 @@ MODEL_NAME = os.getenv("MODEL_NAME", "Qwen/Qwen2.5-1.5B-Instruct")
 if not MODEL_NAME:
     raise ValueError("MODEL_NAME environment variable is not set.")
 
-OUTPUT_DIR = os.getenv("OUTPUT_DIR", "outputs/default-GRPO")
-if not OUTPUT_DIR:
-    raise ValueError("OUTPUT_DIR environment variable is not set.")
+# OUTPUT_DIR = os.getenv("OUTPUT_DIR", "outputs/default-GRPO")
+# if not OUTPUT_DIR:
+#     raise ValueError("OUTPUT_DIR environment variable is not set.")
 
 RUN_NAME = os.getenv("RUN_NAME", "default-GRPO-gsm8k")
 if not RUN_NAME:
     raise ValueError("RUN_NAME environment variable is not set.")
+
+OUTPUT_DIR = f"./experiments-gsm8k/{RUN_NAME}"
+os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 
 # Configurable one-shot prompting
@@ -101,6 +104,10 @@ def get_gsm8k_questions(split="train", use_one_shot=False) -> Dataset:
 train_dataset = get_gsm8k_questions(use_one_shot=True)
 eval_dataset = get_gsm8k_questions(split="test", use_one_shot=True)
 
+# Print dataset statistics
+print(f"Train dataset size: {len(train_dataset)}")
+print(f"Eval dataset size: {len(eval_dataset)}")
+
 
 # Reward functions
 def correctness_reward_func(prompts, completions, answer, **kwargs) -> list[float]:
@@ -108,9 +115,9 @@ def correctness_reward_func(prompts, completions, answer, **kwargs) -> list[floa
     responses = [completion[0]["content"] for completion in completions]
     q = prompts[0][-1]["content"]
     extracted_responses = [extract_xml_answer(r) for r in responses]
-    logger.info(
-        f"Question:\n{q}\nAnswer:\n{answer[0]}\nResponse:\n{responses[0]}\nExtracted:\n{extracted_responses[0]}"
-    )
+    # logger.info(
+    #     f"Question:\n{q}\nAnswer:\n{answer[0]}\nResponse:\n{responses[0]}\nExtracted:\n{extracted_responses[0]}"
+    # )
     return [2.0 if r == a else 0.0 for r, a in zip(extracted_responses, answer)]
 
 
@@ -155,19 +162,43 @@ def count_xml(text) -> float:
     return count
 
 
+def get_tokenizer(model_name):
+
+    tokenizer = AutoTokenizer.from_pretrained(model_name)
+
+    # Check if tokenizer is already a chat tokenizer
+    if tokenizer.chat_template is not None:
+        return tokenizer
+
+    # Very dumb "chat" template: just concatenates user + assistant messages.
+    # You can adjust this to something more realistic if you want.
+    tokenizer.chat_template = """{% for message in messages %}
+    {% if message['role'] == 'user' %}
+    User: {{ message['content'] }}
+    {% elif message['role'] == 'assistant' %}
+    Assistant: {{ message['content'] }}
+    {% endif %}
+    {% endfor %}Assistant:"""
+
+    # "{% for message in messages %}{% if loop.first and messages[0]['role'] != 'system' %}{{ '<|im_start|>system\nYou are a helpful assistant.<|im_end|>\n' }}{% endif %}{{'<|im_start|>' + message['role'] + '\n' + message['content'] + '<|im_end|>' + '\n'}}{% endfor %}{% if add_generation_prompt %}{{ '<|im_start|>assistant\n' }}{% endif %}"
+
+    return tokenizer
+
+
 # Model setup
 try:
     model = AutoModelForCausalLM.from_pretrained(
         MODEL_NAME,
         torch_dtype=torch.bfloat16,
-        # attn_implementation="flash_attention_2",
+        attn_implementation="flash_attention_2",
         device_map="auto",
     ).to("cuda")
 except Exception as e:
     logger.error(f"Failed to load model: {e}")
     raise
 
-tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
+# tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
+tokenizer = get_tokenizer(MODEL_NAME)
 tokenizer.pad_token = tokenizer.eos_token
 
 # PEFT config (optional)
@@ -197,7 +228,6 @@ training_args = GRPOConfig(
     weight_decay=0.1,
     warmup_ratio=0.1,
     lr_scheduler_type="cosine",
-    logging_steps=1,
     bf16=True,
     per_device_train_batch_size=8,  # Increased from 1
     gradient_accumulation_steps=1,  # Reduced from 4
@@ -205,10 +235,16 @@ training_args = GRPOConfig(
     max_prompt_length=256,
     max_completion_length=786,
     num_train_epochs=1,
-    save_steps=100,
     max_grad_norm=0.1,
+    # Save
+    save_steps=100,
+    # Logging
+    logging_steps=10,
     report_to="wandb",
     log_on_each_node=False,
+    # Eval
+    eval_steps=3000,
+    eval_strategy="steps",
 )
 
 # Trainer setup
@@ -229,7 +265,14 @@ trainer = GRPOTrainer(
 
 # Train the model
 try:
-    trainer.train()
+    trainer.train(
+        resume_from_checkpoint=(
+            True if len(os.listdir(f"./experiments/{OUTPUT_DIR}")) > 0 else False
+        )
+    )
 except Exception as e:
     logger.error(f"Training failed: {e}")
     raise
+
+
+trainer.push_to_hub()
