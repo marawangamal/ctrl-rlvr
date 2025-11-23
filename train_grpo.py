@@ -23,6 +23,8 @@ gemma-2b:
 |     |       |strict-match    |     5|exact_match|↑  |0.1721|±  |0.0104|
 """
 
+# TODO: fix parsing ad EOS and space token
+
 import argparse
 from contextlib import nullcontext
 import os
@@ -1012,7 +1014,9 @@ class DummyLogitsProcessor(LogitsProcessor):
                 else [[" "]]
             )
             suffix_ids = (
-                tokenizer.encode(prompts[0]["solution"])
+                tokenizer.encode(" ")
+                + tokenizer.encode(prompts[0]["solution"])
+                + [tokenizer.eos_token_id]
                 if constraint_mode == "suffix" or constraint_mode == "both"
                 else None
             )
@@ -1131,7 +1135,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--max_new_tokens",
         type=int,
-        default=32,
+        default=128,
         help="Maximum length of the prompt.",
     )
     parser.add_argument(
@@ -1139,6 +1143,11 @@ if __name__ == "__main__":
         type=int,
         default=6,
         help="Maximum number of new tokens to generate.",
+    )
+    parser.add_argument(
+        "--bf16",
+        action="store_true",
+        help="Use bf16 for training.",
     )
     args = parser.parse_args()
 
@@ -1167,6 +1176,7 @@ if __name__ == "__main__":
             "b": args.batch_size,
             "n": args.max_samples,
             "c": args.constraint_mode,
+            "bf16": "True" if args.bf16 else "False",
         }
     )
     print(f"\n\nRunning with run name: {run_name}\n\n")
@@ -1191,10 +1201,10 @@ if __name__ == "__main__":
         log_completions=True,
         num_completions_to_print=4,
         # Eval
-        # eval_steps=500,
-        # eval_strategy="steps",
+        eval_steps=500,
+        eval_strategy="steps",
         # Training
-        # bf16=True,
+        bf16=args.bf16,
     )
     tokenizer = get_tokenizer(model_name)
     trainer = GRPOTrainerCustom(
