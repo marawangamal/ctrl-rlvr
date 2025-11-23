@@ -266,9 +266,7 @@ trainer = GRPOTrainer(
 # Train the model
 try:
     trainer.train(
-        resume_from_checkpoint=(
-            True if len(os.listdir(f"./experiments/{OUTPUT_DIR}")) > 0 else False
-        )
+        resume_from_checkpoint=(True if len(os.listdir(OUTPUT_DIR)) > 0 else False)
     )
 except Exception as e:
     logger.error(f"Training failed: {e}")
