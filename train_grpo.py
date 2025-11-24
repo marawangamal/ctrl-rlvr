@@ -6,7 +6,7 @@ python train_grpo.py --model gpt2-large --hmm ctrlg/hmm_gpt2-large_common-gen_32
 
 Evaluation:
 accelerate launch -m lm_eval --model hf \
-    --model_args pretrained=mremila/grpo_model_deepmath_103k_hm_none_b_8_n_10 \
+    --model_args pretrained=mremila/tulu2-7b-gsm8k-uncons \
     --tasks gsm8k \
     --batch_size 64
 
@@ -21,6 +21,18 @@ gemma-2b:
 |-----|------:|----------------|-----:|-----------|---|-----:|---|-----:|
 |gsm8k|      3|flexible-extract|     5|exact_match|↑  |0.1766|±  |0.0105|
 |     |       |strict-match    |     5|exact_match|↑  |0.1721|±  |0.0104|
+
+gemma-2b after rl-finetuning
+|Tasks|Version|     Filter     |n-shot|  Metric   |   |Value |   |Stderr|
+|-----|------:|----------------|-----:|-----------|---|-----:|---|-----:|
+|gsm8k|      3|flexible-extract|     5|exact_match|↑  |0.1668|±  |0.0103|
+|     |       |strict-match    |     5|exact_match|↑  |0.1630|±  |0.0102|
+
+tulu-2-7b after rl-finetuning for 3k iters
+|Tasks|Version|     Filter     |n-shot|  Metric   |   |Value |   |Stderr|
+|-----|------:|----------------|-----:|-----------|---|-----:|---|-----:|
+|gsm8k|      3|flexible-extract|     5|exact_match|↑  |0.3813|±  |0.0134|
+|     |       |strict-match    |     5|exact_match|↑  |0.3776|±  |0.0134|
 """
 
 # TODO: fix parsing ad EOS and space token
@@ -1079,8 +1091,17 @@ def fmt_str(s):
 
 
 def create_run_name(dct):
-    return fmt_str(f"_".join([f"{k}_{v}" for k, v in dct.items()]))
+    return fmt_str(f"_".join([f"{k}{v}" for k, v in dct.items()])).lower()
 
+
+ARGS_NAME_MAP = {
+    # Models
+    "allenai/tulu-2-7b": "t27b",
+    "ctrlg/hmm_gpt2-large_common-gen_4096": "g2lh4096",
+    "gpt2-large": "g2l",
+    # Datasets
+    "trl-lib/DeepMath-103K": "dm103k",
+}
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
@@ -1168,9 +1189,9 @@ if __name__ == "__main__":
         test_dataset = test_dataset.select(range(args.max_samples))
     run_name = f"crl_" + create_run_name(
         {
-            "m": model_name.split("/")[-1],
-            "d": dataset_name.split("/")[-1],
-            "hm": args.hmm.split("/")[-1] if args.hmm is not None else None,
+            "m": ARGS_NAME_MAP.get(model_name, model_name),
+            "d": ARGS_NAME_MAP.get(dataset_name, dataset_name),
+            "hm": ARGS_NAME_MAP.get(args.hmm, args.hmm),
             "mx": args.max_new_tokens,
             "mn": args.min_new_tokens,
             "b": args.batch_size,
@@ -1196,6 +1217,7 @@ if __name__ == "__main__":
         # Saving
         save_steps=100,
         save_total_limit=2,
+        push_to_hub=True,
         # Logging
         logging_steps=5,
         log_completions=True,

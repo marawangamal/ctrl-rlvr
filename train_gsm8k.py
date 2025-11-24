@@ -1,4 +1,5 @@
 # train_grpo.py: https://github.com/kossisoroyce/train_grpo.py
+# CUDA_VISIBLE_DEVICES=0 MODEL_NAME=allenai/tulu-2-7b RUN_NAME=tulu2-7b-gsm8k-uncons python train_gsm8k.py
 import re
 import torch
 from datasets import load_dataset, Dataset
@@ -58,7 +59,7 @@ if not MODEL_NAME:
 
 # OUTPUT_DIR = os.getenv("OUTPUT_DIR", "outputs/default-GRPO")
 # if not OUTPUT_DIR:
-#     raise ValueError("OUTPUT_DIR environment variable is not set.")
+#     raise ValueError("OUTPUT_DIR environm111ent variable is not set.")
 
 RUN_NAME = os.getenv("RUN_NAME", "default-GRPO-gsm8k")
 if not RUN_NAME:
@@ -115,9 +116,9 @@ def correctness_reward_func(prompts, completions, answer, **kwargs) -> list[floa
     responses = [completion[0]["content"] for completion in completions]
     q = prompts[0][-1]["content"]
     extracted_responses = [extract_xml_answer(r) for r in responses]
-    # logger.info(
-    #     f"Question:\n{q}\nAnswer:\n{answer[0]}\nResponse:\n{responses[0]}\nExtracted:\n{extracted_responses[0]}"
-    # )
+    logger.info(
+        f"Question:\n{q}\nAnswer:\n{answer[0]}\nResponse:\n{responses[0]}\nExtracted:\n{extracted_responses[0]}"
+    )
     return [2.0 if r == a else 0.0 for r, a in zip(extracted_responses, answer)]
 
 
@@ -185,14 +186,16 @@ def get_tokenizer(model_name):
     return tokenizer
 
 
+# device = "cuda" if torch.cuda.is_available() else "cpu"
+
 # Model setup
 try:
     model = AutoModelForCausalLM.from_pretrained(
         MODEL_NAME,
         torch_dtype=torch.bfloat16,
-        attn_implementation="flash_attention_2",
-        device_map="auto",
-    ).to("cuda")
+        # attn_implementation="flash_attention_2" if device == "cuda" else None,
+        # device_map="auto",
+    )
 except Exception as e:
     logger.error(f"Failed to load model: {e}")
     raise
@@ -238,6 +241,8 @@ training_args = GRPOConfig(
     max_grad_norm=0.1,
     # Save
     save_steps=100,
+    save_total_limit=3,
+    push_to_hub=True,
     # Logging
     logging_steps=10,
     report_to="wandb",
@@ -265,9 +270,9 @@ trainer = GRPOTrainer(
 
 # Train the model
 try:
-    trainer.train(
-        resume_from_checkpoint=(True if len(os.listdir(OUTPUT_DIR)) > 0 else False)
-    )
+    resume_from_checkpoint = True if len(os.listdir(OUTPUT_DIR)) > 0 else False
+    print(f"Resuming from checkpoint: {resume_from_checkpoint}")
+    trainer.train(resume_from_checkpoint=resume_from_checkpoint)
 except Exception as e:
     logger.error(f"Training failed: {e}")
     raise
