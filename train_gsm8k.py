@@ -956,20 +956,20 @@ class DummyLogitsProcessor(LogitsProcessor):
         # check if all solutions are the same:
         self.dfa_logits_processor = None
         if (
-            all(p["solution"] == prompts[0]["solution"] for p in prompts)
+            all(p["question"] == prompts[0]["question"] for p in prompts)
             and hmm_model is not None
         ):
             device = self.generate_inputs["input_ids"][0].device
             hmm_model = hmm_model.to(device)
 
             keyphrases = (
-                [[prompts[0]["solution"]]]
+                [[prompts[0]["answer"]]]
                 if constraint_mode == "keyphrase" or constraint_mode == "both"
                 else [[" "]]
             )
             suffix_ids = (
                 tokenizer.encode(" ")
-                + tokenizer.encode(prompts[0]["solution"])
+                + tokenizer.encode(prompts[0]["answer"])
                 + [tokenizer.eos_token_id]
                 if constraint_mode == "suffix" or constraint_mode == "both"
                 else None
@@ -1059,9 +1059,9 @@ def correctness_reward_func(prompts, completions, answer, **kwargs) -> list[floa
     responses = [completion[0]["content"] for completion in completions]
     q = prompts[0][-1]["content"]
     extracted_responses = [extract_xml_answer(r) for r in responses]
-    logger.info(
-        f"Question:\n{q}\nAnswer:\n{answer[0]}\nResponse:\n{responses[0]}\nExtracted:\n{extracted_responses[0]}"
-    )
+    # logger.info(
+    #     f"Question:\n{q}\nAnswer:\n{answer[0]}\nResponse:\n{responses[0]}\nExtracted:\n{extracted_responses[0]}"
+    # )
     return [2.0 if r == a else 0.0 for r, a in zip(extracted_responses, answer)]
 
 
@@ -1143,6 +1143,8 @@ ARGS_NAME_MAP = {
     # Models
     "allenai/tulu-2-7b": "t27b",
     "ctrlg/hmm_gpt2-large_common-gen_4096": "g2lh4096",
+    "ctrlg/tulu2-7b_writing-prompts": "ctrlg_t27b",
+    "ctrlg/hmm_tulu2-7b_writing-prompts_32768": "ctrlg_t27bh32768",
     "gpt2-large": "g2l",
     # Datasets
     "trl-lib/DeepMath-103K": "dm103k",
@@ -1156,7 +1158,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--model",
         type=str,
-        # default="Qwen/Qwen2-0.5B-Instruct",
+        # default="Qwen/Qwen2-0.5B-Instruct", ctrlg/tulu2-7b_writing-prompts
         default="ctrlg/gpt2-large_common-gen",  # use even smaller model: "erwanf/gpt2-mini" or "gpt2-small"
         help="Name of the model to train (e.g., 'tulu', 'google/gemma-2b', etc.)",
     )
@@ -1164,6 +1166,7 @@ if __name__ == "__main__":
         "--hmm",
         type=str,
         default=None,
+        # ctrlg/hmm_tulu2-7b_writing-prompts_32768
         # f'ctrlg/hmm_gpt2-large_common-gen_4096' # alternatively 'ctrlg/hmm_gpt2-large_common-gen_32768' for better quality
         help="Name of the HMM model to use (e.g., 'ctrl-g/gpt2', 'gwenweng/gemma', 'gwenweng/gpt2', etc.)",
     )
@@ -1201,6 +1204,7 @@ if __name__ == "__main__":
         # attn_implementation="flash_attention_2" if device == "cuda" else None,
         # device_map="auto",
     )
+    hmm_model = ctrlg.HMM.from_pretrained(args.hmm) if args.hmm is not None else None
 
     train_dataset = get_gsm8k_questions(use_one_shot=True)
     eval_dataset = get_gsm8k_questions(split="test", use_one_shot=True)
@@ -1289,6 +1293,17 @@ if __name__ == "__main__":
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
         # peft_config=peft_config  # Uncomment if PEFT is working for you
+        logits_processor_fns=[
+            lambda *a, **kw: DummyLogitsProcessor(
+                *a,
+                **kw,
+                tokenizer=tokenizer,
+                hmm_model=hmm_model,
+                min_new_tokens=args.min_new_tokens,
+                max_new_tokens=args.max_new_tokens,
+                constraint_mode=args.constraint_mode,
+            )
+        ],
     )
 
     resume_from_checkpoint = True if len(os.listdir(OUTPUT_DIR)) > 0 else False

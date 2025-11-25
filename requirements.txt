@@ -12,3 +12,4 @@ tiktoken
 sentencepiece
 protobuf
 git+https://github.com/joshuacnf/Ctrl-G
+# module load cuda/12.6 arrow python/3.12 httpproxy
