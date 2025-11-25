@@ -1,6 +1,7 @@
 # train_grpo.py: https://github.com/kossisoroyce/train_grpo.py
 # CUDA_VISIBLE_DEVICES=0 MODEL_NAME=allenai/tulu-2-7b RUN_NAME=tulu2-7b-gsm8k-uncons python train_gsm8k.py
 import argparse
+import random
 import re
 import logging
 from contextlib import nullcontext
@@ -890,7 +891,7 @@ def get_dfa_model(
         constraint_logits_processor: Logits processor for the DFA model.
     """
 
-    vocab_size = len(tokenizer)
+    vocab_size = tokenizer.vocab_size
 
     ##################################### prefix, suffix, prompt #####################################
     prefix = ""  # generate text starting with nothing
@@ -945,6 +946,7 @@ class DummyLogitsProcessor(LogitsProcessor):
         min_new_tokens: int = 5,
         max_new_tokens: int = 32,
         constraint_mode: Literal["suffix", "keyphrase"] = "suffix",
+        p_constraint: float = 1.0,  # probability of applying the constraint
     ):
         self.generate_inputs = generate_inputs
         self.prompts = prompts
@@ -955,9 +957,11 @@ class DummyLogitsProcessor(LogitsProcessor):
 
         # check if all solutions are the same:
         self.dfa_logits_processor = None
+        apply_constraint = random.random() < p_constraint
         if (
             all(p["question"] == prompts[0]["question"] for p in prompts)
             and hmm_model is not None
+            and apply_constraint
         ):
             device = self.generate_inputs["input_ids"][0].device
             hmm_model = hmm_model.to(device)
@@ -967,13 +971,10 @@ class DummyLogitsProcessor(LogitsProcessor):
                 if constraint_mode == "keyphrase" or constraint_mode == "both"
                 else [[" "]]
             )
-            suffix_ids = (
-                tokenizer.encode(" ")
-                + tokenizer.encode(prompts[0]["answer"])
-                + [tokenizer.eos_token_id]
-                if constraint_mode == "suffix" or constraint_mode == "both"
-                else None
-            )
+            suffix_ids = None
+            if constraint_mode == "suffix" or constraint_mode == "both":
+                sfx = f"<answer>{prompts[0]['answer']}</answer>{tokenizer.eos_token}"
+                suffix_ids = tokenizer.encode(sfx)
             prompt_ids = generate_inputs["input_ids"][0].tolist()
 
             self.dfa_logits_processor = get_dfa_model(
@@ -1195,6 +1196,12 @@ if __name__ == "__main__":
         default=6,
         help="Maximum number of new tokens to generate.",
     )
+    parser.add_argument(
+        "--pcons",
+        type=float,
+        default=1.0,
+        help="Probability of applying the constraint.",
+    )
     args = parser.parse_args()
 
     # Model setup
@@ -1242,6 +1249,7 @@ if __name__ == "__main__":
             "mn": args.min_new_tokens,
             "n": args.max_samples,
             "c": args.constraint_mode,
+            "p": args.pcons,
         }
     )
 
@@ -1302,6 +1310,7 @@ if __name__ == "__main__":
                 min_new_tokens=args.min_new_tokens,
                 max_new_tokens=args.max_new_tokens,
                 constraint_mode=args.constraint_mode,
+                p_constraint=args.pcons,
             )
         ],
     )
