@@ -872,59 +872,7 @@ class GRPOTrainerCustom(GRPOTrainer):
 ##############################################################################
 
 
-# def get_dfa_model(
-#     hmm_model,
-#     tokenizer,
-#     prompt_ids,
-#     keyphrases=[[" "]],
-#     suffix_ids=None,
-#     min_new_tokens=5,
-#     max_new_tokens=32,
-# ):
-
-#     device = next(hmm_model.parameters()).device
-#     vocab_size = len(tokenizer)
-
-#     # Prefix & suffix constraints
-#     prefix = ""  # generate text starting with nothing
-#     suffix = ".<|endoftext|>"  # generate text ending with '<|endoftext|>'; a suffix must end with the eos token
-#     prefix_ids = tokenizer.encode(prefix)
-#     if suffix_ids is None:
-#         suffix_ids = tokenizer.encode(suffix)
-
-#     # DFA Construction
-#     # ac_builder constructs a DFA representing the constraint that (at least)
-#     # one the patterns must appear; a pattern is a sequence of token ids
-#     ac_builder = ctrlg.AhoCorasickBuilder(vocab_size)
-
-#     dfa_graphs = []
-#     for keyphrase in keyphrases:
-#         patterns = [tokenizer.encode(x) for x in keyphrase]
-#         dfa_graphs.append(ac_builder.build(patterns))
-
-#     # taking the intersection of the DFAs, i.e., "logical and" of the constraints.
-#     # This function also minimizes the constructed DFA, which is mainly CPU-based operations;
-#     # Due to its pure python implemenation, DFA minimization can be slow for complex constraints
-#     dfa_graph = ctrlg.DFA_prod(dfa_graphs, mode="intersection")
-
-#     # compile the dfa_graph for efficient GPU execution
-#     dfa_model = ctrlg.DFAModel(dfa_graph, vocab_size).to(device)
-
-#     # Constraint logits processor
-#     constraint_logits_processor = ctrlg.ConstraintLogitsProcessor(
-#         hmm_model,
-#         dfa_model,
-#         min_new_tokens,
-#         max_new_tokens,
-#         prompt_ids,
-#         prefix_ids=prefix_ids,
-#         suffix_ids=suffix_ids,
-#     )
-
-#     return constraint_logits_processor
-
-
-def get_dfa_model_v2(
+def get_dfa_model(
     hmm_model: torch.nn.Module,
     prompt_ids: List[int],  # Shape: (B, T)
     tokenizer: AutoTokenizer,
@@ -1034,7 +982,7 @@ class DummyLogitsProcessor(LogitsProcessor):
             )
             prompt_ids = generate_inputs["input_ids"][0].tolist()
 
-            self.dfa_logits_processor = get_dfa_model_v2(
+            self.dfa_logits_processor = get_dfa_model(
                 hmm_model=hmm_model,
                 tokenizer=tokenizer,
                 prompt_ids=prompt_ids,
