@@ -1262,14 +1262,16 @@ if __name__ == "__main__":
         max_grad_norm=0.1,
         # Save
         save_steps=100,
-        save_total_limit=3,
+        save_total_limit=2,
         push_to_hub=True,
         # Logging
         logging_steps=10,
+        log_completions=True,
+        num_completions_to_print=4,
         report_to="wandb",
         log_on_each_node=False,
         # Eval
-        eval_steps=3000,
+        eval_steps=1000,
         eval_strategy="steps",
     )
 
