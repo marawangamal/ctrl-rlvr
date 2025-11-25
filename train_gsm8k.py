@@ -275,9 +275,10 @@ if __name__ == "__main__":
     )
 
     # Training config
+    OUTPUT_DIR = f"./experiments/{run_name}"
     training_args = GRPOConfig(
-        output_dir=f"./experiments/{run_name}",
-        run_name=args.run_name,
+        output_dir=OUTPUT_DIR,
+        run_name=run_name,
         learning_rate=5e-6,
         adam_beta1=0.9,
         adam_beta2=0.99,
