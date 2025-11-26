@@ -6,9 +6,9 @@ python train_grpo.py --model gpt2-large --hmm ctrlg/hmm_gpt2-large_common-gen_32
 
 Evaluation:
 accelerate launch -m lm_eval --model hf \
-    --model_args pretrained=mremila/tulu2-7b-gsm8k-uncons \
+    --model_args pretrained=mremila/crl2_mctrlg_t27b_dgsm8k_hmctrlg_t27bh32768_mx128_mn6_nnone_csuffix_p0.3,dtype=bfloat16 \
     --tasks gsm8k \
-    --batch_size 64
+    --batch_size 16
 
 grpo_model_deepmath_103k_hm_none_b_64_n_1000:
 |Tasks|Version|     Filter     |n-shot|  Metric   |   |Value |   |Stderr|

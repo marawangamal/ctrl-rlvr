@@ -1,3 +1,7 @@
+"""
+python train_gsm8k.py --model ctrlg/tulu2-7b_writing-prompts --hmm ctrlg/hmm_tulu2-7b_writing-prompts_32768 --pcons 0.3
+"""
+
 # train_grpo.py: https://github.com/kossisoroyce/train_grpo.py
 # CUDA_VISIBLE_DEVICES=0 MODEL_NAME=allenai/tulu-2-7b RUN_NAME=tulu2-7b-gsm8k-uncons python train_gsm8k.py
 import argparse
@@ -1209,7 +1213,7 @@ if __name__ == "__main__":
         args.model,
         dtype=torch.bfloat16,
         # attn_implementation="flash_attention_2" if device == "cuda" else None,
-        # device_map="auto",
+        device_map="auto",
     )
     hmm_model = ctrlg.HMM.from_pretrained(args.hmm) if args.hmm is not None else None
 
